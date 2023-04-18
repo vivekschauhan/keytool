@@ -3,11 +3,14 @@ package main
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"hash"
 	"io/ioutil"
 
 	"github.com/spf13/cobra"
@@ -109,12 +112,31 @@ func run(_ *cobra.Command, _ []string) error {
 		if err != nil {
 			panic(err)
 		}
-		encData, err := encrypt(publicKey, "RSA-OAEP", data)
+		encData, err := encrypt(publicKey, "RSA-OAEP", "SHA256", data)
 		if err != nil {
 			panic(err)
 		}
 		ioutil.WriteFile(cfg.DataFile+".encrypted", []byte(encData), 0666)
 		logger.Info(fmt.Sprintf("Encrypted base64 encoded content written to %s", cfg.DataFile+".encrypted"))
+	} else {
+		logger.Info(fmt.Sprintf("Decrypting %s with %s", cfg.DataFile, cfg.PrivateKey))
+		pemFileContent, err := ioutil.ReadFile(cfg.PrivateKey)
+		if err != nil {
+			panic(err)
+		}
+
+		privateKey := parsePrivateKey(pemFileContent)
+
+		data, err := ioutil.ReadFile(cfg.DataFile)
+		if err != nil {
+			panic(err)
+		}
+		decryptedData, err := decrypt(privateKey, "RSA-OAEP", "SHA256", data)
+		if err != nil {
+			panic(err)
+		}
+		ioutil.WriteFile(cfg.DataFile+".decrypted", []byte(decryptedData), 0666)
+		logger.Info(fmt.Sprintf("Decrypted content written to %s", cfg.DataFile+".decrypted"))
 	}
 	return nil
 }
@@ -133,20 +155,67 @@ func parsePublicKey(pub []byte) *rsa.PublicKey {
 	return pk.(*rsa.PublicKey)
 }
 
-func encrypt(pk *rsa.PublicKey, alg string, data []byte) (string, error) {
-	enc := func(v []byte) (string, error) {
-		switch alg {
-		case "RSA-OAEP":
-			bts, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, pk, v, nil)
-			return base64.StdEncoding.EncodeToString(bts), err
-		case "PKCS":
-			bts, err := rsa.EncryptPKCS1v15(rand.Reader, pk, v)
-			return base64.StdEncoding.EncodeToString(bts), err
-		default:
-			return "", fmt.Errorf("unexpected algorithm")
-		}
+func parsePrivateKey(private []byte) *rsa.PrivateKey {
+	block, _ := pem.Decode(private)
+	if block == nil {
+		panic("failed to parse PEM block containing the public key")
 	}
 
-	bts, err := enc(data)
-	return bts, err
+	pk, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		panic("failed to parse private key: " + err.Error())
+	}
+
+	return pk
+}
+
+func encrypt(pk *rsa.PublicKey, alg, hashAlg string, data []byte) (string, error) {
+	hash, err := getHash(hashAlg)
+	if err != nil {
+		return "", err
+	}
+
+	switch alg {
+	case "RSA-OAEP":
+		bts, err := rsa.EncryptOAEP(hash, rand.Reader, pk, data, nil)
+		return base64.StdEncoding.EncodeToString(bts), err
+	case "PKCS":
+		bts, err := rsa.EncryptPKCS1v15(rand.Reader, pk, data)
+		return base64.StdEncoding.EncodeToString(bts), err
+	default:
+		return "", fmt.Errorf("unexpected algorithm")
+	}
+}
+
+func decrypt(key *rsa.PrivateKey, alg, hashAlg string, data []byte) ([]byte, error) {
+	hash, err := getHash(hashAlg)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := base64.StdEncoding.DecodeString(string(data))
+	if err != nil {
+		return nil, err
+	}
+	switch alg {
+	case "RSA-OAEP":
+		return rsa.DecryptOAEP(hash, rand.Reader, key, []byte(raw), nil)
+	case "PKCS":
+		return rsa.DecryptPKCS1v15(rand.Reader, key, []byte(raw))
+	default:
+		return nil, fmt.Errorf("unexpected algorithm")
+	}
+}
+
+func getHash(hashAlg string) (hash hash.Hash, err error) {
+	switch hashAlg {
+	case "SHA1":
+		hash = sha1.New()
+	case "SHA256":
+		hash = sha256.New()
+	case "SHA512":
+		hash = sha512.New()
+	default:
+		err = fmt.Errorf("unexpected hashing algorithm")
+	}
+	return
 }
