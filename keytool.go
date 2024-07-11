@@ -1,38 +1,29 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha1"
-	"crypto/sha256"
-	"crypto/sha512"
-	"crypto/x509"
-	"encoding/base64"
-	"encoding/pem"
 	"fmt"
-	"hash"
-	"io/ioutil"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"github.com/vivekschauhan/keytool/decrypt"
+	"github.com/vivekschauhan/keytool/encrypt"
+	"github.com/vivekschauhan/keytool/keys"
 )
 
 // Config the configuration for the KeyTool
 type Config struct {
-	PrivateKey string `mapstructure:"private_key"`
-	PublicKey  string `mapstructure:"public_key"`
-	DataFile   string `mapstructure:"data_file"`
-	Decrypt    bool   `mapstructure:"decrypt"`
-	Level      string `mapstructure:"log_level"`
-	Format     string `mapstructure:"log_format"`
+	PrivateKey      string `mapstructure:"private_key"`
+	PublicKey       string `mapstructure:"public_key"`
+	DataFile        string `mapstructure:"data_file"`
+	Decrypt         bool   `mapstructure:"decrypt"`
+	GenerateKeyPair bool   `mapstructure:"generate_keypair"`
+	UseSymmetric    bool   `mapstructure:"use_symmetric"`
+	UseJwe          bool   `mapstructure:"use_jwe"`
+	Level           string `mapstructure:"log_level"`
+	Format          string `mapstructure:"log_format"`
 }
-
-// result, err := encrypt(parsePublicKey(key), "RSA-OAEP", data)
-// if err != nil {
-// 	log.Fatal(err)
-// }
-// fmt.Printf("%s\n", result)
 
 var cfg = &Config{}
 
@@ -58,6 +49,9 @@ func initFlags(cmd *cobra.Command) {
 	cmd.Flags().String("public_key", "", "public key used for encrypting the content")
 	cmd.Flags().String("data_file", "", "the data file that will be encrypted/decrypted")
 	cmd.Flags().Bool("decrypt", false, "flag for decrypting the content")
+	cmd.Flags().Bool("use_symmetric", false, "flag for using symmetric key")
+	cmd.Flags().Bool("use_jwe", false, "flag for using JWE")
+	cmd.Flags().Bool("generate_keypair", false, "generate keypair")
 	cmd.Flags().String("log_level", "info", "log level")
 	cmd.Flags().String("log_format", "json", "line or json")
 }
@@ -78,12 +72,10 @@ func initViperConfig(cmd *cobra.Command) error {
 // bindFlagsToViperConfig - For each flag, look up its corresponding env var, and use the env var if the flag is not set.
 func bindFlagsToViperConfig(cmd *cobra.Command, v *viper.Viper) {
 	cmd.Flags().VisitAll(func(f *pflag.Flag) {
-		// name := strings.ToUpper(f.Name)
 		if err := v.BindPFlag(f.Name, f); err != nil {
 			panic(err)
 		}
 
-		// Apply the viper config value to the flag when the flag is not set and viper has a value
 		if !f.Changed && v.IsSet(f.Name) {
 			val := v.Get(f.Name)
 			err := cmd.Flags().Set(f.Name, fmt.Sprintf("%v", val))
@@ -99,123 +91,60 @@ func run(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if !cfg.Decrypt {
-		logger.Info(fmt.Sprintf("Encrypting %s with %s", cfg.DataFile, cfg.PublicKey))
-		pemFileContent, err := ioutil.ReadFile(cfg.PublicKey)
-		if err != nil {
-			panic(err)
-		}
-
-		publicKey := parsePublicKey(pemFileContent)
-
-		data, err := ioutil.ReadFile(cfg.DataFile)
-		if err != nil {
-			panic(err)
-		}
-		encData, err := encrypt(publicKey, "RSA-OAEP", "SHA256", data)
-		if err != nil {
-			panic(err)
-		}
-		ioutil.WriteFile(cfg.DataFile+".encrypted", []byte(encData), 0666)
-		logger.Info(fmt.Sprintf("Encrypted base64 encoded content written to %s", cfg.DataFile+".encrypted"))
-	} else {
+	switch {
+	case cfg.GenerateKeyPair:
+		_, err := keys.CreateKeyPair()
+		fmt.Println("Key generated")
+		return err
+	case cfg.Decrypt:
 		logger.Info(fmt.Sprintf("Decrypting %s with %s", cfg.DataFile, cfg.PrivateKey))
-		pemFileContent, err := ioutil.ReadFile(cfg.PrivateKey)
+		pemFileContent, err := os.ReadFile(cfg.PrivateKey)
 		if err != nil {
 			panic(err)
 		}
 
-		privateKey := parsePrivateKey(pemFileContent)
+		privateKey, err := keys.ParsePrivateKey(pemFileContent)
+		if err != nil {
+			panic(err)
+		}
 
-		data, err := ioutil.ReadFile(cfg.DataFile)
+		msg, err := os.ReadFile(cfg.DataFile)
 		if err != nil {
 			panic(err)
 		}
-		decryptedData, err := decrypt(privateKey, "RSA-OAEP", "SHA256", data)
+
+		data, err := decrypt.Decrypt(privateKey, "RSA-OAEP", "SHA256", string(msg), cfg.UseSymmetric, cfg.UseJwe)
 		if err != nil {
 			panic(err)
 		}
-		ioutil.WriteFile(cfg.DataFile+".decrypted", []byte(decryptedData), 0666)
+
+		os.WriteFile(cfg.DataFile+".decrypted", []byte(data), 0666)
 		logger.Info(fmt.Sprintf("Decrypted content written to %s", cfg.DataFile+".decrypted"))
+
+	default:
+		logger.Info(fmt.Sprintf("Encrypting %s with %s", cfg.DataFile, cfg.PublicKey))
+		pemFileContent, err := os.ReadFile(cfg.PublicKey)
+		if err != nil {
+			panic(err)
+		}
+
+		publicKey, err := keys.ParsePublicKey(pemFileContent)
+		if err != nil {
+			panic(err)
+		}
+
+		data, err := os.ReadFile(cfg.DataFile)
+		if err != nil {
+			panic(err)
+		}
+
+		msg, err := encrypt.Encrypt(publicKey, "RSA-OAEP", "SHA256", string(data), cfg.UseSymmetric, cfg.UseJwe)
+		if err != nil {
+			panic(err)
+		}
+
+		os.WriteFile(cfg.DataFile+".encrypted", []byte(msg), 0666)
+		logger.Info(fmt.Sprintf("Encrypted base64 encoded content written to %s", cfg.DataFile+".encrypted"))
 	}
 	return nil
-}
-
-func parsePublicKey(pub []byte) *rsa.PublicKey {
-	block, _ := pem.Decode(pub)
-	if block == nil {
-		panic("failed to parse PEM block containing the public key")
-	}
-
-	pk, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		panic("failed to parse private key: " + err.Error())
-	}
-
-	return pk.(*rsa.PublicKey)
-}
-
-func parsePrivateKey(private []byte) *rsa.PrivateKey {
-	block, _ := pem.Decode(private)
-	if block == nil {
-		panic("failed to parse PEM block containing the public key")
-	}
-
-	pk, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-	if err != nil {
-		panic("failed to parse private key: " + err.Error())
-	}
-
-	return pk
-}
-
-func encrypt(pk *rsa.PublicKey, alg, hashAlg string, data []byte) (string, error) {
-	hash, err := getHash(hashAlg)
-	if err != nil {
-		return "", err
-	}
-
-	switch alg {
-	case "RSA-OAEP":
-		bts, err := rsa.EncryptOAEP(hash, rand.Reader, pk, data, nil)
-		return base64.StdEncoding.EncodeToString(bts), err
-	case "PKCS":
-		bts, err := rsa.EncryptPKCS1v15(rand.Reader, pk, data)
-		return base64.StdEncoding.EncodeToString(bts), err
-	default:
-		return "", fmt.Errorf("unexpected algorithm")
-	}
-}
-
-func decrypt(key *rsa.PrivateKey, alg, hashAlg string, data []byte) ([]byte, error) {
-	hash, err := getHash(hashAlg)
-	if err != nil {
-		return nil, err
-	}
-	raw, err := base64.StdEncoding.DecodeString(string(data))
-	if err != nil {
-		return nil, err
-	}
-	switch alg {
-	case "RSA-OAEP":
-		return rsa.DecryptOAEP(hash, rand.Reader, key, []byte(raw), nil)
-	case "PKCS":
-		return rsa.DecryptPKCS1v15(rand.Reader, key, []byte(raw))
-	default:
-		return nil, fmt.Errorf("unexpected algorithm")
-	}
-}
-
-func getHash(hashAlg string) (hash hash.Hash, err error) {
-	switch hashAlg {
-	case "SHA1":
-		hash = sha1.New()
-	case "SHA256":
-		hash = sha256.New()
-	case "SHA512":
-		hash = sha512.New()
-	default:
-		err = fmt.Errorf("unexpected hashing algorithm")
-	}
-	return
 }
