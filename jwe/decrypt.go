@@ -50,7 +50,7 @@ func parseJweElement(elements []string, index int, b64Decode bool) ([]byte, erro
 	if index < len(elements) {
 		val := []byte(elements[index])
 		if b64Decode {
-			return base64.RawURLEncoding.DecodeString(string(val))
+			return base64.StdEncoding.DecodeString(string(val))
 		}
 		return val, nil
 	}
