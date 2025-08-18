@@ -27,7 +27,7 @@ func encryptWithKey(key *rsa.PublicKey, alg, hashAlg string, data []byte) (strin
 	if err != nil {
 		return "", err
 	}
-	return base64.URLEncoding.EncodeToString(encData), nil
+	return base64.StdEncoding.EncodeToString(encData), nil
 }
 
 func encryptWithSymmetricKey(key *rsa.PublicKey, alg, hashAlg string, data []byte) (string, error) {
@@ -43,7 +43,7 @@ func encryptWithSymmetricKey(key *rsa.PublicKey, alg, hashAlg string, data []byt
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s.%s", encKey, base64.URLEncoding.EncodeToString(encData)), nil
+	return fmt.Sprintf("%s.%s", encKey, base64.StdEncoding.EncodeToString(encData)), nil
 }
 
 func encryptWithJWE(key *rsa.PublicKey, alg, hashAlg string, data []byte) (string, error) {

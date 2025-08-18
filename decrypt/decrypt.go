@@ -31,8 +31,8 @@ func decryptWithKey(key *rsa.PrivateKey, alg, hashAlg string, encData []byte) (s
 
 func decryptWithSymmetricKey(key *rsa.PrivateKey, alg, hashAlg, msg string) (string, error) {
 	elements := strings.Split(msg, ".")
-	encSymKey, _ := base64.URLEncoding.DecodeString(elements[0])
-	encData, _ := base64.URLEncoding.DecodeString(elements[1])
+	encSymKey, _ := base64.StdEncoding.DecodeString(elements[0])
+	encData, _ := base64.StdEncoding.DecodeString(elements[1])
 
 	symmetricKey, err := decryptWithKey(key, alg, hashAlg, encSymKey)
 	if err != nil {
